@@ -1,0 +1,24 @@
+{
+  "name": "dublin-commute-overlay",
+  "version": "0.1.0",
+  "description": "Chrome extension overlaying public transport lines and commute times on daft.ie",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "watch": "node tools/build.mjs --watch",
+    "data": "node tools/build-transport-data.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "preview": "node tools/build.mjs && node tools/preview-server.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node tools/layertest.mjs && node tools/selftest.mjs",
+    "test:offline": "node tools/layertest.mjs && node tools/selftest.mjs --offline",
+    "package": "node tools/build.mjs && node tools/package.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2"
+  }
+}

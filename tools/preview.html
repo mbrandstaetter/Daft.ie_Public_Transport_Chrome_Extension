@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Panel preview</title>
+    <style>
+      body { margin: 0; height: 100vh; background: #e8eef2;
+             font: 14px -apple-system, 'Segoe UI', Roboto, sans-serif; }
+      .fake-map { position: absolute; inset: 0;
+        background:
+          repeating-linear-gradient(0deg, #dde6ec 0 39px, #cfdae2 39px 40px),
+          repeating-linear-gradient(90deg, #dde6ec 0 39px, #cfdae2 39px 40px); }
+      .note { position: absolute; top: 12px; left: 16px; color: #4a5a66; }
+    </style>
+  </head>
+  <body>
+    <div class="fake-map"></div>
+    <div class="note">Stubbed harness — renders the real built <code>isolated.js</code> panel.</div>
+    <script>
+      // Minimal stand-ins for the extension APIs the panel uses.
+      const DESTINATIONS = [
+        { id: 'a', label: 'Trinity College', address: 'Trinity College, Dublin',
+          lngLat: [-6.2546, 53.3438], color: '#2f6f8f', enabled: true },
+        { id: 'b', label: 'Sandyford', address: 'Sandyford, Dublin',
+          lngLat: [-6.2233, 53.2776], color: '#b4531f', enabled: true },
+      ];
+      const ITINERARY = {
+        totalMinutes: 39, walkMinutes: 18, transfers: 0,
+        startTime: '2026-08-14T07:10:00Z', endTime: '2026-08-14T07:49:00Z',
+        legs: [
+          { mode: 'WALK', minutes: 10, coords: [[-6.24, 53.287], [-6.245, 53.29]] },
+          { mode: 'TRAM', routeName: 'Green', minutes: 21, coords: [[-6.245, 53.29], [-6.26, 53.34]] },
+          { mode: 'WALK', minutes: 8, coords: [[-6.26, 53.34], [-6.2546, 53.3438]] },
+        ],
+      };
+      const SETTINGS = {
+        visibleModes: ['luas', 'dart', 'commuter'], showStops: true,
+        lineOpacity: 0.9, enabled: true, autoPlan: true, panelPos: null,
+      };
+      const OPTIONS = {
+        arriveBy: true, targetHour: 9, targetMinute: 0, targetDate: null,
+        travelMode: 'transit', maxWalkMeters: 1000, maxTransfers: 3, maxTravelMinutes: 120,
+      };
+
+      window.chrome = {
+        runtime: {
+          getURL: (p) => p,
+          sendMessage: async (msg) => {
+            switch (msg.type) {
+              case 'GET_STATE':
+                return { ok: true, kind: 'state', destinations: DESTINATIONS,
+                         settings: SETTINGS, commuteOptions: OPTIONS };
+              case 'GET_LINES':
+                return { ok: true, kind: 'lines',
+                         lines: { type: 'FeatureCollection', features: [] },
+                         stops: { type: 'FeatureCollection', features: [] } };
+              case 'PLAN':
+                return { ok: true, kind: 'plan', results: [
+                  { destId: 'a', itineraries: [ITINERARY], fromCache: false },
+                  { destId: 'b', error: { kind: 'no-route' } },
+                ] };
+              default:
+                return { ok: true, kind: 'ack' };
+            }
+          },
+        },
+        storage: {
+          local: { get: async () => ({}), set: async () => {} },
+          sync: { get: async () => ({}), set: async () => {} },
+        },
+      };
+
+      // Simulate a property click shortly after boot, so results are on screen.
+      setTimeout(() => {
+        window.postMessage({ __dpt_v1: true, dir: 'm2i',
+          payload: { type: 'MAP_READY', surface: 'search' } }, location.origin);
+        window.postMessage({ __dpt_v1: true, dir: 'm2i',
+          payload: { type: 'PROPERTY_CLICKED', listingId: '6282327',
+                     lng: -6.2402, lat: 53.2871, priceLabel: '€2,450+' } }, location.origin);
+      }, 400);
+    </script>
+    <script type="module" src="./isolated.js"></script>
+  </body>
+</html>

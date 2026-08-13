@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Dublin Commute Overlay — Options</title>
+    <style>
+      body {
+        font: 14px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        max-width: 640px;
+        margin: 40px auto;
+        padding: 0 20px;
+        color: #1d1d22;
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #6a6a76; margin: 28px 0 10px; }
+      p.lede { color: #6a6a76; margin: 0 0 8px; }
+      label { display: flex; align-items: center; gap: 10px; margin: 9px 0; }
+      label span { flex: 1; }
+      input[type=number] { width: 90px; padding: 5px 7px; border: 1px solid #d5d5de; border-radius: 6px; }
+      button {
+        padding: 8px 13px; border-radius: 7px; border: 1px solid #12303f;
+        background: #12303f; color: #fff; cursor: pointer; font-size: 13px;
+      }
+      button.danger { background: #fff; color: #9b2c2c; border-color: #d9a6a6; }
+      .saved { color: #1f7a5c; font-size: 12px; margin-left: 10px; }
+      footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid #ececf1; font-size: 12px; color: #7a7a86; }
+      footer a { color: #2f6f8f; }
+      .note { background: #f6f8fa; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #55555f; }
+    </style>
+  </head>
+  <body>
+    <h1>Dublin Commute Overlay</h1>
+    <p class="lede">Public transport lines and commute times on daft.ie.</p>
+
+    <h2>Commute</h2>
+    <label>
+      <span>Arrive by (hour, Dublin time)</span>
+      <input type="number" id="hour" min="0" max="23" step="1" />
+    </label>
+    <label>
+      <span>Maximum walking distance (metres)</span>
+      <input type="number" id="walk" min="200" max="3000" step="100" />
+    </label>
+    <label>
+      <span>Maximum transfers</span>
+      <input type="number" id="transfers" min="0" max="6" step="1" />
+    </label>
+    <label>
+      <span>Maximum journey time (minutes)</span>
+      <input type="number" id="maxTime" min="15" max="240" step="5" />
+    </label>
+    <p class="note">
+      Times are always computed for the next weekday in <b>Europe/Dublin</b>, so results stay
+      consistent across the summer/winter clock change.
+    </p>
+    <button id="save">Save</button><span class="saved" id="savedMsg" hidden>Saved</span>
+
+    <h2>Your data</h2>
+    <p class="note">
+      Saved destinations live in your browser only. They are sent to the routing service as
+      coordinates when you look up a commute, and never anywhere else.
+    </p>
+    <button class="danger" id="wipe">Delete all my data</button>
+    <span class="saved" id="wipedMsg" hidden>Cleared</span>
+
+    <footer>
+      Routing by <a href="https://transitous.org/" target="_blank" rel="noreferrer">Transitous</a>
+      (<a href="https://transitous.org/sources/" target="_blank" rel="noreferrer">sources</a>) —
+      a free, volunteer-run service. Line and stop data from the National Transport Authority
+      via <a href="https://data.gov.ie/" target="_blank" rel="noreferrer">data.gov.ie</a> (CC-BY 4.0).
+      Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>
+      contributors.
+    </footer>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

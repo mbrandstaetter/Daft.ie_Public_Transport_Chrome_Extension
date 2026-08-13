@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Dublin Commute Overlay",
+  "version": "0.1.0",
+  "description": "Overlays public transport lines on daft.ie maps and shows commute times from any property to your saved destinations.",
+  "minimum_chrome_version": "111",
+  "permissions": ["storage", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["https://api.transitous.org/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.daft.ie/*"],
+      "js": ["main-world.js"],
+      "world": "MAIN",
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.daft.ie/*"],
+      "js": ["isolated.js"],
+      "world": "ISOLATED",
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "transitous-ua",
+        "enabled": true,
+        "path": "rules/transitous.json"
+      }
+    ]
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Dublin Commute Overlay"
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

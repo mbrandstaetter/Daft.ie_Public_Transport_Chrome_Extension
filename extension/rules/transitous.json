@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "User-Agent",
+          "operation": "set",
+          "value": "DublinCommuteOverlay/0.1.0 (+https://github.com/mbrandstaetter/Daft.ie_Public_Transport)"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||api.transitous.org/",
+      "resourceTypes": ["xmlhttprequest", "other"]
+    }
+  }
+]
