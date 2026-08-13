@@ -73,6 +73,42 @@ function getLineData(): Promise<{ lines: unknown; stops: unknown }> {
   return linesPromise;
 }
 
+/* ------------------------------ toolbar icon ------------------------------ */
+
+/**
+ * The icon is the master switch, with no popup: one click, one thing.
+ *
+ * It writes `settings.enabled` and stops there. Every open daft.ie tab picks the change
+ * up through `chrome.storage.onChanged`, which needs no `tabs` permission and no host
+ * permission for daft.ie - `chrome.tabs.sendMessage` would need one of those, and would
+ * only reach the tab that happened to be in front. Storage reaches all of them.
+ */
+async function paintBadge(enabled: boolean): Promise<void> {
+  // Only the off state gets a badge: a permanent marker on a working extension is noise.
+  await chrome.action.setBadgeText({ text: enabled ? '' : 'off' });
+  await chrome.action.setBadgeBackgroundColor({ color: '#8a8a92' });
+  await chrome.action.setTitle({
+    title: enabled
+      ? 'Dublin Commute Overlay — on. Click to turn off.'
+      : 'Dublin Commute Overlay — off. Click to turn on.',
+  });
+}
+
+chrome.action.onClicked.addListener(() => {
+  void (async () => {
+    const settings = await getSettings();
+    const enabled = !settings.enabled;
+    await chrome.storage.local.set({ settings: { ...settings, enabled } });
+    await paintBadge(enabled);
+  })();
+});
+
+// Badge text does not survive a browser restart, so it is repainted from what is stored
+// rather than assumed. Both events matter: onInstalled covers the first run and updates.
+const restoreBadge = () => void getSettings().then((s) => paintBadge(s.enabled));
+chrome.runtime.onStartup.addListener(restoreBadge);
+chrome.runtime.onInstalled.addListener(restoreBadge);
+
 /* --------------------------------- routing -------------------------------- */
 
 function toCommuteError(err: unknown): CommuteError {

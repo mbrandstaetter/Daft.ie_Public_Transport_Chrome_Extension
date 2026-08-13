@@ -273,6 +273,36 @@ map.addLayer(layerSpec, beforeId);
 
 All our ids are namespaced `dpt-*` so we can find and remove them cleanly.
 
+### 3.4 The toolbar icon is the master switch
+
+No popup: one click, one thing. `chrome.action.onClicked` flips `settings.enabled`, writes
+it, and stops there.
+
+**Propagation is via `chrome.storage.onChanged`, not `chrome.tabs.sendMessage`.** Two
+reasons, and the second is the real one:
+
+- `tabs.sendMessage` needs either the `tabs` permission or host permission for daft.ie,
+  neither of which this extension requests (§9) and neither of which it should start
+  requesting for a UI toggle.
+- It would reach one tab. A master switch that leaves the overlay running in the three
+  other daft.ie tabs you have open has not switched anything off. Storage reaches all of
+  them, including ones opened later, which read the stored value at boot anyway.
+
+**Off has to mean off**, and that is wider than it first looks:
+
+- The panel is hidden outright, not greyed out.
+- `applySettings` hides *everything* we own — lines, stops, the drawn route, and the
+  user's own destination pins. Destination pins are exempt from the mode chips (turning
+  Luas off says nothing about where you work) but not from this.
+- No routing lookups. `selectProperty` returns early, so neither a pin click nor a detail
+  page spends a request while the extension is off.
+- Switching back on re-emits `PANEL_READY`, so a detail page re-selects and re-plans
+  exactly as a fresh load would. Nothing has to be remembered across the off state.
+
+The badge shows `off` only — a permanent badge on a working extension is noise. It does
+not survive a browser restart, so it is repainted from storage on `onStartup` and
+`onInstalled`.
+
 ---
 
 ## 4. Data layer
@@ -674,7 +704,12 @@ No `web_accessible_resources`: the bundled GeoJSON is read by the service worker
 passed over the message channel (§3.1), so nothing needs exposing to the page.
 
 Deliberately **not** requested: `tabs`, `<all_urls>`, `scripting`, `webRequest`. Keep it
-minimal — it is also what makes an eventual Store review straightforward.
+minimal — it is also what makes an eventual Store review straightforward. The on/off
+toggle is the place this constraint bites, and §3.4 is how it is met without `tabs`.
+
+`action` carries a `default_title` and **no** `default_popup`: with no popup, clicks reach
+`chrome.action.onClicked`, which is the whole toggle. Adding a popup later would silently
+stop that event firing.
 
 `declarativeNetRequest` rule: set `User-Agent` on requests to `api.transitous.org` to
 `DublinCommuteOverlay/<version> (+<contact url or email>)`.

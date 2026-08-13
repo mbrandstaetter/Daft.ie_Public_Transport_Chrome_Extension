@@ -40,7 +40,7 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "Dublin Commute Overlay"
+    "default_title": "Dublin Commute Overlay — click to turn on or off"
   },
   "icons": {
     "128": "icons/icon128.png"

@@ -559,6 +559,11 @@ function renderResults(): HTMLElement {
 function render(): void {
   mount();
 
+  // The toolbar icon is a master switch, so off means gone rather than greyed out. The
+  // host stays in the document: it costs nothing, and re-enabling is then just a render.
+  root.hidden = !state.settings.enabled;
+  if (!state.settings.enabled) return;
+
   // render() rebuilds the whole subtree, which destroys the scrolling element - a fresh
   // one starts at scrollTop 0. Without carrying it over, every re-render (including the
   // one when commute results arrive) yanks the panel back to the top.
@@ -710,6 +715,10 @@ async function addDestination(hit: GeocodeHit): Promise<void> {
  * pin click on the search map, and a detail page naming its own listing.
  */
 function selectProperty(selection: NonNullable<State['selection']>): void {
+  // Switched off means switched off: no selection, and above all no routing lookup.
+  // Re-enabling asks MAIN to announce the listing again, so nothing is lost by ignoring
+  // it here rather than remembering it for later.
+  if (!state.settings.enabled) return;
   state.selection = selection;
   state.listingUnresolved = false;
   state.listingPending = false;
@@ -796,6 +805,36 @@ async function sendLineData(): Promise<void> {
 }
 
 /* -------------------------------- inbound --------------------------------- */
+
+/**
+ * The toolbar icon writes `settings` and nothing else; this is how the click reaches the
+ * page. Every open daft.ie tab hears it, so the switch is genuinely global rather than
+ * applying to whichever tab was in front when it was clicked.
+ */
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes['settings']) return;
+  const incoming = changes['settings'].newValue as Partial<DisplaySettings> | undefined;
+  if (!incoming) return;
+
+  const next = { ...DEFAULT_DISPLAY_SETTINGS, ...incoming };
+  // This tab's own saves come back through here too; re-rendering on them is wasted work.
+  if (JSON.stringify(next) === JSON.stringify(state.settings)) return;
+
+  const wasEnabled = state.settings.enabled;
+  state.settings = next;
+  postToMain({ type: 'SETTINGS_CHANGED', settings: state.settings });
+
+  if (wasEnabled && !next.enabled) {
+    // Leave nothing of ours behind on Daft's map.
+    clearSelection();
+    state.lineInfo = null;
+  }
+  render();
+
+  // Switched back on: ask MAIN to say what page we are on, which re-selects a detail
+  // listing and re-plans it exactly as a fresh page load would.
+  if (!wasEnabled && next.enabled) postToMain({ type: 'PANEL_READY' });
+});
 
 onMainMessage((message: MainToIsolated) => {
   switch (message.type) {

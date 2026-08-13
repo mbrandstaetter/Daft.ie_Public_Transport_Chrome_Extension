@@ -309,6 +309,17 @@ export function applySettings(map: MapLike, settings: DisplaySettings): void {
   show(LAYER_STOPS_CIRCLE, visible && settings.showStops);
   show(LAYER_STOPS_LABEL, visible && settings.showStops);
 
+  // `enabled` is the toolbar icon: off means the extension has left Daft's map alone,
+  // not that it drew less of itself. Everything we own goes, including the user's own
+  // destination pins and any drawn route - the mode chips below are what selectively
+  // hide parts while it is on.
+  show(LAYER_DEST_HALO, visible);
+  show(LAYER_DEST_DOT, visible);
+  show(LAYER_DEST_LABEL, visible);
+  show(LAYER_JOURNEY_WALK, visible);
+  show(LAYER_JOURNEY_TRANSIT, visible);
+  show(LAYER_JOURNEY_ENDS, visible);
+
   if (map.getLayer(LAYER_LINES_CORE)) {
     map.setFilter(LAYER_LINES_CORE, modeFilter(settings.visibleModes));
     map.setPaintProperty(LAYER_LINES_CORE, 'line-opacity', settings.lineOpacity);

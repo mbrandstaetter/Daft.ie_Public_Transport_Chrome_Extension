@@ -395,12 +395,29 @@ console.log('\nDestination pins');
   check('dot draws above its own halo',
     ours.indexOf('dpt-dest-dot') > ours.indexOf('dpt-dest-halo'));
 
-  // Destinations are user data, not part of the transport overlay: the master switch
-  // and the mode chips must not make them disappear.
-  mod.applySettings(map, { ...SETTINGS, enabled: false, visibleModes: [] });
-  check('master switch does not hide destinations',
-    map._state.layout.get('dpt-dest-dot.visibility') === undefined,
+  // Destinations are user data, not part of the transport overlay, so the mode chips
+  // must not make them disappear — turning Luas off says nothing about where you work.
+  mod.applySettings(map, { ...SETTINGS, visibleModes: [] });
+  check('mode chips do not hide destinations',
+    map._state.layout.get('dpt-dest-dot.visibility') === 'visible',
     String(map._state.layout.get('dpt-dest-dot.visibility')));
+
+  // The master switch is different in kind: it is the toolbar icon, and off has to mean
+  // the extension left Daft's map alone. Leaving the user's pins and a drawn route behind
+  // would read as the switch not having worked.
+  mod.applySettings(map, { ...SETTINGS, enabled: false });
+  const hidden = (id) => map._state.layout.get(`${id}.visibility`) === 'none';
+  check('master switch hides destinations too', hidden('dpt-dest-dot') && hidden('dpt-dest-halo'),
+    String(map._state.layout.get('dpt-dest-dot.visibility')));
+  check('master switch hides the drawn route',
+    hidden('dpt-journey-walk') && hidden('dpt-journey-transit') && hidden('dpt-journey-ends'));
+
+  // And back on again — off must not be a one-way door.
+  mod.applySettings(map, SETTINGS);
+  check('switching back on restores everything',
+    map._state.layout.get('dpt-dest-dot.visibility') === 'visible' &&
+    map._state.layout.get('dpt-journey-transit.visibility') === 'visible' &&
+    map._state.layout.get('dpt-lines-core.visibility') === 'visible');
 
   // Destinations can arrive before the line bundle; a null source would throw.
   const early = fakeMap();

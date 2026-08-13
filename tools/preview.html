@@ -18,6 +18,7 @@
     <div class="note">
       Stubbed harness — renders the real built <code>isolated.js</code> panel.
       Add <code>?detail</code> for the self-selecting detail page.
+      <button id="toggle" type="button">Toolbar icon</button>
     </div>
     <script>
       // Minimal stand-ins for the extension APIs the panel uses.
@@ -45,6 +46,20 @@
         travelMode: 'transit', maxWalkMeters: 1000, maxTransfers: 3, maxTravelMinutes: 120,
       };
 
+      // The panel reads settings back through storage, and the toolbar icon reaches the
+      // page only via storage.onChanged — so the stub needs a real one, not a no-op, or
+      // the master switch cannot be exercised here at all.
+      const STORE = { settings: { ...SETTINGS } };
+      const listeners = [];
+      const setLocal = (patch) => {
+        const changes = {};
+        for (const [key, newValue] of Object.entries(patch)) {
+          changes[key] = { oldValue: STORE[key], newValue };
+          STORE[key] = newValue;
+        }
+        listeners.forEach((fn) => fn(changes, 'local'));
+      };
+
       window.chrome = {
         runtime: {
           getURL: (p) => p,
@@ -52,7 +67,10 @@
             switch (msg.type) {
               case 'GET_STATE':
                 return { ok: true, kind: 'state', destinations: DESTINATIONS,
-                         settings: SETTINGS, commuteOptions: OPTIONS };
+                         settings: STORE.settings, commuteOptions: OPTIONS };
+              case 'SAVE_SETTINGS':
+                STORE.settings = msg.settings; // no dispatch: the panel already knows
+                return { ok: true, kind: 'ack' };
               case 'GET_LINES':
                 return { ok: true, kind: 'lines',
                          lines: { type: 'FeatureCollection', features: [] },
@@ -68,10 +86,17 @@
           },
         },
         storage: {
-          local: { get: async () => ({}), set: async () => {} },
+          local: { get: async () => ({ ...STORE }), set: async (patch) => setLocal(patch) },
           sync: { get: async () => ({}), set: async () => {} },
+          onChanged: { addListener: (fn) => listeners.push(fn) },
         },
       };
+
+      // Stands in for clicking the toolbar icon: the background writes `enabled` and
+      // stops there, exactly as the real service worker does.
+      document.getElementById('toggle').addEventListener('click', () => {
+        setLocal({ settings: { ...STORE.settings, enabled: !STORE.settings.enabled } });
+      });
 
       // Stand in for the MAIN-world script. The panel announces itself with PANEL_READY
       // when it boots, so the harness answers on that rather than on a guessed delay.

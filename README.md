@@ -17,6 +17,9 @@ actually go.
   check what a Saturday looks like. Defaults to the next weekday.
 - **Your destinations on the map** — saved places show as coloured pins, so you can see
   where a property sits relative to them before asking for a number.
+- **One click to switch it off** — the toolbar icon is a master switch. Off means the
+  panel is gone, nothing of ours is on Daft's map, and no lookups happen at all; the icon
+  shows an `off` badge. It applies to every open daft.ie tab at once.
 
 Design rationale and the findings behind it are in [SPEC.md](SPEC.md); privacy in
 [PRIVACY.md](PRIVACY.md); release process in [PUBLISHING.md](PUBLISHING.md).
@@ -79,7 +82,12 @@ commits to an answer with nothing to click:
 9. Scroll down to the map → the journey is drawn there, even though it was calculated
    before the map existed.
 
-`npm run preview` also has a `?detail` mode that renders this path against stubs.
+10. Click the toolbar icon → the panel disappears, the lines and your destination pins go
+    with it, and the icon gains an `off` badge. Click again → everything comes back, and a
+    detail page re-answers itself. Open a second daft.ie tab first to confirm both follow.
+
+`npm run preview` also has a `?detail` mode and a **Toolbar icon** button that render these
+paths against stubs.
 
 If step 1 fails with "Couldn't attach to Daft's map", their bundle has changed shape; the
 fix is confined to `extension/src/main-world/map-handle.ts`.
