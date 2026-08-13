@@ -26,7 +26,8 @@ await writeFile(
   entry,
   `export * from ${JSON.stringify(path.join(root, 'extension/src/main-world/layers.ts').replace(/\\/g, '/'))};
    export * from ${JSON.stringify(path.join(root, 'extension/src/main-world/map-handle.ts').replace(/\\/g, '/'))};
-   export * from ${JSON.stringify(path.join(root, 'extension/src/shared/layout.ts').replace(/\\/g, '/'))};`
+   export * from ${JSON.stringify(path.join(root, 'extension/src/shared/layout.ts').replace(/\\/g, '/'))};
+   export * from ${JSON.stringify(path.join(root, 'extension/src/shared/listing.ts').replace(/\\/g, '/'))};`
 );
 const outfile = path.join(work, 'bundle.mjs');
 await esbuild.build({ entryPoints: [entry], outfile, bundle: true, format: 'esm', platform: 'neutral', logLevel: 'silent' });
@@ -213,6 +214,74 @@ console.log('\nJourney rendering');
   check('legs without geometry are skipped', partial.features.filter((f) => f.properties.kind !== 'endpoint').length === 1);
 }
 
+console.log('\nA drawn route outlives the map it was drawn on');
+{
+  // Models main-world's refresh() — what runs on attach, 'load' and 'styledata'.
+  // The detail page makes this load-bearing: its commute is computed from the page's own
+  // data, so the route routinely exists before the lazy-mounted map does, and redrawing on
+  // attach is the only thing that ever puts it on screen. ensureLayers re-adds the journey
+  // source *empty*, so holding the itinerary and pushing it afterwards is the whole trick.
+  const itinerary = {
+    totalMinutes: 39, walkMinutes: 18, transfers: 0,
+    startTime: '2026-08-13T07:13:00Z', endTime: '2026-08-13T07:52:00Z',
+    legs: [
+      { mode: 'WALK', minutes: 10, coords: [[-6.24, 53.287], [-6.245, 53.29]] },
+      { mode: 'TRAM', routeName: 'Green', minutes: 21, coords: [[-6.245, 53.29], [-6.26, 53.34]] },
+    ],
+  };
+
+  const map = fakeMap();
+  let journey = { itinerary: null, color: '#000000' };
+  const refresh = () => {
+    mod.ensureLayers(map, DATA, SETTINGS);
+    mod.setJourney(map, journey.itinerary, journey.color);
+  };
+  const drawn = () => {
+    const last = map._state.setDataCalls.at(-1);
+    return last?.id === 'dpt-journey' && last.data.features.length > 0;
+  };
+
+  refresh();
+  check('a map that attaches before any route draws nothing', !drawn());
+
+  journey = { itinerary, color: '#2f6f8f' }; // HIGHLIGHT_ROUTE arrives
+  mod.setJourney(map, journey.itinerary, journey.color);
+  check('the route is drawn when it arrives', drawn());
+
+  map.simulateSetStyle();
+  refresh();
+  check('and comes back after Daft restyles the map', drawn(),
+    'ensureLayers re-adds dpt-journey empty; the held itinerary is what restores it');
+
+  // The other half: a fresh map (detail page scrolled into view) must show it too.
+  const late = fakeMap();
+  mod.ensureLayers(late, DATA, SETTINGS);
+  mod.setJourney(late, journey.itinerary, journey.color);
+  const shown = late._state.setDataCalls.at(-1);
+  check('a map mounted after the fact shows the route immediately',
+    shown.id === 'dpt-journey' && shown.data.features.length > 0);
+
+  // And the reverse order, which the detail page hits routinely: the map attaches, a route
+  // is calculated, and only then does the line bundle arrive from the service worker.
+  // Nothing exists to draw into until it does, so LINES_DATA has to redraw, not just add.
+  const early = fakeMap();
+  let bundle = null;
+  const earlyRefresh = () => {
+    if (bundle) mod.ensureLayers(early, bundle, SETTINGS);
+    mod.setJourney(early, journey.itinerary, journey.color);
+  };
+  earlyRefresh();
+  check('with no line bundle yet there is nothing to draw into',
+    early._state.setDataCalls.length === 0);
+
+  bundle = DATA; // LINES_DATA arrives
+  earlyRefresh();
+  const painted = early._state.setDataCalls.at(-1);
+  check('the route is painted once the layers exist',
+    painted?.id === 'dpt-journey' && painted.data.features.length > 0,
+    'LINES_DATA must redraw the journey, not only call ensureLayers');
+}
+
 console.log('\nFiber walk');
 {
   // Mirrors the shape found on daft.ie: the map hides in a hook's memoizedState, two
@@ -375,6 +444,54 @@ console.log('\nMap-swap recovery (the search <-> detail navigation case)');
   check('container gone: report lost', decide(null, a, deadMap) === 'lost');
   check('no container and nothing held: idle', decide(null, null, null) === 'idle');
   check('first sight of a container: attach', decide(a, null, null) === 'reattach');
+}
+
+console.log('\nDetail-page listing detection');
+{
+  const id = mod.listingIdFromPath;
+
+  check('a rental detail URL yields its id', id('/for-rent/flat-1-69-grove-park-rathmines-dublin-6/6640128') === '6640128');
+  check('a sale detail URL yields its id', id('/for-sale/12-main-street-dublin-1/1234567') === '1234567');
+  check('sharing and new-home sections count too',
+    id('/share/a-room-dublin-2/7654321') === '7654321' && id('/new-home-for-sale/the-grange-dublin/999') === '999');
+  check('a trailing slash is tolerated', id('/for-rent/somewhere-dublin/6640128/') === '6640128');
+  check('a search page is not a detail page', id('/property-for-rent/dublin-city') === null);
+  check('a section index is not a detail page', id('/for-rent/dublin') === null);
+
+  // The gate. Both page-supplied sources go stale after a client-side navigation between
+  // listings, and a stale one looks perfectly well-formed - only its id gives it away.
+  const grovePark = { id: 6640128, title: 'Flat 1, 69 Grove Park', point: { type: 'Point', coordinates: [-6.267262, 53.329047] } };
+  const castlewood = { id: 6634811, title: 'Castlewood Avenue', point: { type: 'Point', coordinates: [-6.263337, 53.322603] } };
+
+  const hit = mod.readListing(grovePark, '6640128');
+  check('a matching listing is accepted', hit !== null && hit.lng === -6.267262 && hit.lat === 53.329047,
+    JSON.stringify(hit));
+  check('its title comes through as the label', hit?.label === 'Flat 1, 69 Grove Park');
+  check('the numeric id is compared as a string', mod.readListing({ ...grovePark, id: '6640128' }, '6640128') !== null);
+
+  check('a stale payload for another listing is refused',
+    mod.readListing(grovePark, '6634811') === null,
+    'this is the wrong-property-commute bug the gate exists to prevent');
+
+  check('nothing at all is refused', mod.readListing(null, '6640128') === null);
+  check('a listing with no point is refused', mod.readListing({ id: 6640128 }, '6640128') === null);
+  check('a half-built point is refused', mod.readListing({ id: 6640128, point: { coordinates: [-6.26] } }, '6640128') === null);
+  check('string coordinates are refused',
+    mod.readListing({ id: 6640128, point: { coordinates: ['-6.26', '53.32'] } }, '6640128') === null);
+  check('out-of-range coordinates are refused',
+    mod.readListing({ id: 6640128, point: { coordinates: [-6.26, 953.32] } }, '6640128') === null);
+  check('a listing with no title still resolves, without a label',
+    mod.readListing({ id: 6640128, point: { coordinates: [-6.26, 53.32] } }, '6640128')?.label === undefined);
+
+  // Source order: router props first, __NEXT_DATA__ second. After an in-page navigation
+  // the second is the stale one, and must not be allowed to answer for the first.
+  check('the fresh source wins when the fallback is stale',
+    mod.pickListing([castlewood, grovePark], '6634811')?.lng === -6.263337);
+  check('a stale first source falls through to the fallback',
+    mod.pickListing([grovePark, castlewood], '6634811')?.lng === -6.263337);
+  check('both sources stale means no answer, not a guess',
+    mod.pickListing([grovePark, grovePark], '6634811') === null);
+  check('an empty candidate list is a miss', mod.pickListing([], '6634811') === null);
 }
 
 console.log('\nPanel drag bounds');

@@ -6,6 +6,7 @@
  */
 import { PANEL_CSS } from './panel.css';
 import { clampToViewport } from '../shared/layout';
+import { listingIdFromPath } from '../shared/listing';
 import {
   onMainMessage,
   postToMain,
@@ -54,7 +55,14 @@ interface State {
   commuteOptions: CommuteOptions;
   mapReady: boolean;
   attachError: string | null;
-  selection: { listingId: string; lng: number; lat: number; priceLabel?: string } | null;
+  /** `auto` marks a detail page that selected itself, rather than a pin the user clicked. */
+  selection: { listingId: string; lng: number; lat: number; priceLabel?: string; auto: boolean } | null;
+  /** A detail page whose coordinates could not be read - see LISTING_CLEARED. */
+  listingUnresolved: boolean;
+  /** A detail page whose listing is still being resolved: an answer is coming, so wait. */
+  listingPending: boolean;
+  /** Settings are loaded. Until then an automatic selection cannot honour `autoPlan`. */
+  booted: boolean;
   results: PlanEntry[] | null;
   loading: boolean;
   geocodeHits: GeocodeHit[];
@@ -74,6 +82,11 @@ const state: State = {
   mapReady: false,
   attachError: null,
   selection: null,
+  listingUnresolved: false,
+  // A detail page is going to select itself, so the panel starts out waiting rather than
+  // telling the user to click a pin that this page does not have.
+  listingPending: listingIdFromPath(location.pathname) !== null,
+  booted: false,
   results: null,
   loading: false,
   geocodeHits: [],
@@ -466,7 +479,17 @@ function renderResults(): HTMLElement {
   );
 
   if (!state.selection) {
-    section.append(el('div', { class: 'muted' }, 'Click a property pin on the map to see its commute.'));
+    section.append(
+      el(
+        'div',
+        { class: 'muted' },
+        state.listingUnresolved
+          ? 'Couldn’t read this listing’s location from the page — Daft’s page data may have changed shape.'
+          : state.listingPending
+            ? 'Reading this listing…'
+            : 'Click a property pin on the map to see its commute.'
+      )
+    );
     return section;
   }
   if (!state.destinations.some((d) => d.enabled)) {
@@ -474,12 +497,14 @@ function renderResults(): HTMLElement {
     return section;
   }
 
-  // With auto-calculate off, a click only selects the property; the lookup is explicit.
+  // With auto-calculate off, selecting a property does not start the lookup - on a detail
+  // page that means the button is simply waiting, with nothing to click on the map first.
   if (!state.loading && state.results === null) {
+    const what = state.selection.priceLabel ?? 'this property';
     const button = el('button', { class: 'btn' }, 'Calculate commute');
     button.onclick = () => requestPlan();
     section.append(
-      el('div', { class: 'muted' }, `Selected ${state.selection.priceLabel ?? 'property'}.`),
+      el('div', { class: 'muted' }, state.selection.auto ? `This listing: ${what}.` : `Selected ${what}.`),
       button
     );
     return section;
@@ -555,7 +580,17 @@ function render(): void {
   if (state.attachError) {
     body.append(el('div', { class: 'warn' }, `Couldn’t attach to Daft’s map. ${state.attachError}`));
   } else if (!state.mapReady) {
-    body.append(el('div', { class: 'muted' }, 'Waiting for the map… open the map view or scroll to it.'));
+    // A detail page's commute is computed from the page's own data, so the answer below
+    // is already valid; only the drawing of it is waiting on the lazy-mounted map.
+    body.append(
+      el(
+        'div',
+        { class: 'muted' },
+        state.selection?.auto
+          ? 'Scroll down to Daft’s map to see this journey drawn on it.'
+          : 'Waiting for the map… open the map view or scroll to it.'
+      )
+    );
   }
 
   const linesSection = el('section');
@@ -670,6 +705,35 @@ async function addDestination(hit: GeocodeHit): Promise<void> {
   if (state.selection) requestPlan();
 }
 
+/**
+ * One property becomes the subject of the panel. Shared by the two ways that happens: a
+ * pin click on the search map, and a detail page naming its own listing.
+ */
+function selectProperty(selection: NonNullable<State['selection']>): void {
+  state.selection = selection;
+  state.listingUnresolved = false;
+  state.listingPending = false;
+  state.lineInfo = null;
+  state.results = null;
+  state.activeItinerary = null;
+  state.revealResults = true;
+  // A click is a request to look; a page load is not, so an automatic selection must not
+  // re-open a panel the user chose to collapse.
+  if (!selection.auto) state.collapsed = false;
+  postToMain({ type: 'CLEAR_SELECTION' });
+
+  if (state.settings.autoPlan) requestPlan();
+  else render(); // offer the explicit "Calculate commute" button instead
+}
+
+function clearSelection(): void {
+  state.selection = null;
+  state.results = null;
+  state.activeItinerary = null;
+  state.loading = false;
+  postToMain({ type: 'CLEAR_SELECTION' });
+}
+
 function requestPlan(): void {
   const selection = state.selection;
   if (!selection) return;
@@ -689,7 +753,7 @@ function requestPlan(): void {
     if (state.selection?.listingId !== selection.listingId) return;
     state.loading = false;
     state.results = reply.ok && reply.kind === 'plan' ? reply.results : [];
-    state.collapsed = false;
+    if (!selection.auto) state.collapsed = false;
     // Reveal again: the intervening "planning…" render already consumed the flag, and
     // the results are taller than the spinner they replace.
     state.revealResults = true;
@@ -754,21 +818,39 @@ onMainMessage((message: MainToIsolated) => {
       break;
 
     case 'PROPERTY_CLICKED':
-      state.selection = {
+      selectProperty({
         listingId: message.listingId,
         lng: message.lng,
         lat: message.lat,
         priceLabel: message.priceLabel,
-      };
-      state.lineInfo = null;
-      state.results = null;
-      state.activeItinerary = null;
-      state.collapsed = false;
-      state.revealResults = true;
-      postToMain({ type: 'CLEAR_SELECTION' });
+        auto: false,
+      });
+      break;
 
-      if (state.settings.autoPlan) requestPlan();
-      else render(); // offer the explicit "Calculate commute" button instead
+    case 'LISTING_DETECTED':
+      // MAIN resolves the listing synchronously at load, which can beat this side's
+      // settings round-trip - and acting on defaults would run lookups for someone who
+      // turned auto-calculate off. Dropping it is safe: PANEL_READY, sent once settings
+      // are in, asks MAIN to say it again.
+      if (!state.booted) break;
+      // MAIN re-announces on panel boot and on remount, so the same listing can arrive
+      // more than once; re-planning it would be a wasted lookup against a shared service.
+      if (state.selection?.listingId === message.listingId && state.selection.auto) break;
+      selectProperty({
+        listingId: message.listingId,
+        lng: message.lng,
+        lat: message.lat,
+        priceLabel: message.label,
+        auto: true,
+      });
+      break;
+
+    case 'LISTING_CLEARED':
+      state.listingUnresolved = message.reason === 'unresolved';
+      state.listingPending = message.pending;
+      // A pin the user clicked is theirs to dismiss; only the automatic one is dropped.
+      if (state.selection?.auto) clearSelection();
+      render();
       break;
 
     case 'LINE_CLICKED':
@@ -782,6 +864,10 @@ onMainMessage((message: MainToIsolated) => {
 
 void (async () => {
   await refreshState();
+  state.booted = true;
   render();
   await sendLineData();
+  // Ask MAIN for anything it announced while this side was still loading - on a detail
+  // page the listing is usually resolved before the panel exists.
+  postToMain({ type: 'PANEL_READY' });
 })();

@@ -122,6 +122,50 @@ gate. None of this affects us — a content script runs inside the user's own au
 consented session and issues no requests to Daft. **The extension must never call Daft's
 backend APIs directly**; everything comes from the DOM and the map instance.
 
+### 2.6 A detail page names its own listing — but every source of that name goes stale
+
+A detail page is about exactly one property, and it says which:
+`props.pageProps.listing` carries `{ id, title, point.coordinates }`. No click is needed to
+know what to measure. The trap is that the obvious places to read it from are *wrong* after
+a client-side navigation between listings, and wrong in a way that looks perfectly healthy.
+
+Verified live on 2026-08-13, routing from listing `6640128` to `6634811` via the page's own
+"similar properties" links:
+
+| Source | After a fresh load | After in-page navigation |
+|---|---|---|
+| `next.router.components[route].props.pageProps.listing` | correct | **correct** |
+| `__NEXT_DATA__.props.pageProps.listing` | correct | stale — still the SSR'd listing |
+| `script#propertyDetailsSchema` (JSON-LD `Residence`) | correct | stale, for the same reason |
+| `document.title`, `location.pathname` | correct | correct |
+
+The JSON-LD block is injected by `next/script` with a fixed `id`, so Next.js does not
+re-render it; `__NEXT_DATA__` is the SSR payload and never changes after load (§2.3). Both
+keep serving the previous property's address and coordinates indefinitely.
+
+**Therefore: no candidate is trusted on its own.** Each must carry the id that is in the
+URL, and one that does not is discarded rather than used as an approximation:
+
+```
+listingIdFromPath(location.pathname)  ->  "6634811"
+pickListing([router, __NEXT_DATA__], "6634811")   // first to match the id wins
+```
+
+Two sources, in that order — the router's props because they stay correct, `__NEXT_DATA__`
+behind it because it survives router internals being renamed, which is the likelier way the
+first one breaks. The map's centre and its marker are deliberately **not** fallbacks: both
+still yield a coordinate after the user pans, and a confident commute drawn for the wrong
+property is a far worse outcome than no commute at all. When every candidate fails the gate,
+say so.
+
+Timing: `location` changes only once the new page's data has been fetched, so in practice
+the router props are already fresh at the moment the URL changes. That is not guaranteed, so
+detection uses the same retry ladder as map attachment (§3.2) — a stale read costs a retry,
+never a wrong answer.
+
+The detail-page marker carries **no** `pin-container-` testid (unlike §2.4), so the
+click path does not exist there. This is the only way that page can be measured.
+
 ---
 
 ## 3. Architecture
@@ -160,12 +204,26 @@ carries `__dpt: true` and is validated with `event.source === window`.
 | `MAP_READY` | MAIN → ISOLATED | `{ surface: 'search' \| 'detail', mapId }` |
 | `MAP_LOST` | MAIN → ISOLATED | `{ mapId }` |
 | `PROPERTY_CLICKED` | MAIN → ISOLATED | `{ listingId, lng, lat, priceLabel?, url? }` |
+| `LISTING_DETECTED` | MAIN → ISOLATED | `{ listingId, lng, lat, label? }` — a detail page selecting itself (§2.6, §6.6) |
+| `LISTING_CLEARED` | MAIN → ISOLATED | `{ reason: 'navigated' \| 'unresolved', pending }` — `pending` means an answer is still coming |
 | `VIEWPORT_CHANGED` | MAIN → ISOLATED | `{ bbox: [w,s,e,n], zoom }` (debounced 300 ms) |
 | `VISIBLE_MARKERS` | MAIN → ISOLATED | `{ markers: [{ listingId, lng, lat }] }` (Phase 3) |
 | `LINES_DATA` | ISOLATED → MAIN | `{ lines, stops }` — parsed GeoJSON, see note below |
 | `COMMUTE_RESULT` | ISOLATED → MAIN | `{ listingId, destId, summary, geometry? , error? }` |
 | `SETTINGS_CHANGED` | ISOLATED → MAIN | `{ visibleModes, lineOpacity, showStops }` |
 | `HIGHLIGHT_ROUTE` | ISOLATED → MAIN | `{ geometry \| null }` |
+| `PANEL_READY` | ISOLATED → MAIN | `{}` — mirror of `REQUEST_INIT`, see note below |
+
+> **Both worlds need a "I'm listening now" message.** The two content scripts load in
+> either order, and MAIN can resolve a detail listing before ISOLATED exists to hear about
+> it. `REQUEST_INIT` covers ISOLATED loading first; `PANEL_READY` covers MAIN loading first,
+> and MAIN answers it by re-announcing `MAP_READY` and the current `LISTING_DETECTED`.
+> Re-announcement must be idempotent on the panel side: the same listing arriving twice is
+> not a reason to spend another routing lookup. It is also the *only* safe delivery: MAIN
+> resolves the listing synchronously at load, which beats ISOLATED's `chrome.storage`
+> round-trip, so a `LISTING_DETECTED` arriving before settings are loaded would be acted on
+> with `autoPlan` at its default of `true` — running lookups for a user who turned it off.
+> The panel drops anything that arrives pre-boot and lets `PANEL_READY` fetch it again.
 
 > **`LINES_DATA` carries the parsed GeoJSON, not a URL.** An earlier draft had MAIN fetch
 > a `chrome-extension://` URL to avoid cloning a "few hundred KB" bundle. The built bundle
@@ -482,6 +540,36 @@ use when browsing quickly or staying well inside the free service's fair use.
 3. Service worker checks IndexedDB; on miss, queues a `/plan` per enabled destination.
 4. `COMMUTE_RESULT` per destination streams back as each resolves.
 
+### 6.3a On a detail page, there is nothing to click
+
+A detail page is about one property, so requiring a click there is asking the user to tell
+the extension something the page already knows — and §2.6 shows the detail marker has no
+`pin-container-` testid to click anyway. The page selects itself:
+
+1. MAIN resolves the listing per §2.6 and posts `LISTING_DETECTED`. This happens
+   **independently of the map**: the coordinates come from the page's data, so the answer
+   is available before the lazy-mounted map (§3.2) exists, and often before the user has
+   scrolled anywhere near it.
+2. ISOLATED treats it as a selection like any other and honours `autoPlan` — on, the
+   commute is already there when the page finishes loading; off, the **Calculate commute**
+   button is waiting with the property already chosen.
+3. On navigation to another listing, MAIN posts `LISTING_CLEARED` first and the new
+   `LISTING_DETECTED` when the page data catches up. The panel must drop the old answer at
+   step one rather than leaving a stale number under a new address.
+
+Consequences to hold onto:
+
+- **The journey outlives the map.** A route calculated at *t*=1 s must still be drawn when
+  the map mounts at *t*=20 s, so MAIN holds the current journey in module state and
+  re-applies it on attach — the same treatment destination pins already get, and the same
+  reason: `setStyle()` and remounts drop everything.
+- **Only the automatic selection is automatic to clear.** A pin the user clicked on the
+  search map is theirs; navigation clears the page's own selection, not that one.
+- **Request volume moves.** Lookups now follow browsing rather than clicking: one per
+  enabled destination per listing opened. That is the intended behaviour, but it spends the
+  session cap (§7) without being asked, so it is stated in the README and `autoPlan` off
+  remains the way to put every lookup back behind a button.
+
 ### 6.4 Result presentation
 
 Show the **leg breakdown**, not a bare number — the number alone hides a 15-minute walk at
@@ -603,10 +691,10 @@ instance and never load our own copy.
 extension/
   manifest.json
   src/
-    main-world/    map-handle.ts  layers.ts  markers.ts  journey.ts  bus.ts
+    main-world/    map-handle.ts  layers.ts  markers.ts  journey.ts  listing.ts  bus.ts
     isolated/      bridge.ts  panel/  (Shadow DOM UI)
     background/    service-worker.ts  routing/  cache/  ratelimit.ts
-    shared/        messages.ts  types.ts  geo.ts
+    shared/        messages.ts  types.ts  listing.ts  geo.ts
     options/       options.html  options.ts
   public/data/     dublin-rail-lines.geojson  dublin-rail-stops.geojson  ATTRIBUTION.md
 tools/

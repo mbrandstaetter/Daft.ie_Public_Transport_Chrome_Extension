@@ -9,6 +9,8 @@ actually go.
 - **Commute times** — click any property pin to get door-to-door times to each saved
   destination, with the leg breakdown ("walk 10 · Luas Green 21 · walk 8") and the journey
   drawn on the map.
+- **Detail pages answer themselves** — open a listing and its commute is already there, no
+  click needed: the page names which property it is about, so there is nothing to select.
 - **By transport, walk, bike or car** — switch mode in the panel; the whole comparison
   re-runs.
 - **Pin the day and time** — measure every property against the same Tuesday 09:00, or
@@ -65,6 +67,20 @@ after loading**, because it is where this extension is most likely to break:
 5. Close the map and reopen it → lines return.
 6. Console is clean, and layers are not duplicated.
 
+On a detail page, one more thing to check, because it is the one place the extension
+commits to an answer with nothing to click:
+
+7. Open a listing directly → the commute appears without any interaction, and the panel
+   names *that* listing.
+8. From there, click through to a similar property at the bottom of the page → the answer
+   changes to the new listing rather than keeping the old one. Getting this wrong would
+   show a confident commute for the wrong property, so it is worth checking deliberately —
+   the address in the panel must match the address at the top of the page.
+9. Scroll down to the map → the journey is drawn there, even though it was calculated
+   before the map existed.
+
+`npm run preview` also has a `?detail` mode that renders this path against stubs.
+
 If step 1 fails with "Couldn't attach to Daft's map", their bundle has changed shape; the
 fix is confined to `extension/src/main-world/map-handle.ts`.
 
@@ -78,7 +94,7 @@ in the page's own JS world, where `chrome.*` does not exist:
 
 | Context | Responsibility |
 |---|---|
-| `main-world/` | Finds Daft's MapLibre instance via the React fiber, adds our layers, reads marker clicks. Talks out via `postMessage`. |
+| `main-world/` | Finds Daft's MapLibre instance via the React fiber, adds our layers, reads marker clicks, and identifies which listing a detail page is about. Talks out via `postMessage`. |
 | `isolated/` | Bridges `postMessage` ↔ `chrome.runtime`, renders the panel in a Shadow DOM. |
 | `background/` | Every network call, the IndexedDB plan cache, and the rate limiter. |
 
@@ -128,9 +144,16 @@ looks too good, it is worth a second look.
 
 Transitous is free and volunteer-run. This matters in code, not just in spirit:
 
-- Only a click triggers a lookup — there is no prefetching.
+- A lookup happens only for a property you are actually looking at — one you clicked, or
+  the single listing a detail page is about. Nothing is prefetched for properties nearby,
+  in the results list, or in the viewport.
 - Results are cached in IndexedDB for 7 days, keyed on position rounded to ~1 m.
 - Max 2 concurrent requests, 250 ms apart, 200 per session, with exponential backoff.
+  Detail pages spend that budget without being asked: one lookup per enabled destination
+  per listing opened, so with two destinations, browsing 100 listings in one browsing
+  session reaches the cap. Revisits are free, and going over reports itself rather than
+  failing quietly. Turning off *Calculate automatically on click* puts every lookup back
+  behind a button.
 - Requests carry an identifying `User-Agent` set by a `declarativeNetRequest` rule.
   This is **enforced**, not a courtesy — generic user agents get `HTTP 403`.
 
@@ -142,7 +165,7 @@ publish it, run your own MOTIS instance instead — see SPEC.md §4.2.
 ## Layout
 
 ```
-extension/src/main-world/   map attachment, layers, marker clicks
+extension/src/main-world/   map attachment, layers, marker clicks, detail-page listing
 extension/src/isolated/     bridge + panel UI
 extension/src/background/   routing, cache, rate limiting
 extension/src/shared/       message contract, types, Dublin-time handling

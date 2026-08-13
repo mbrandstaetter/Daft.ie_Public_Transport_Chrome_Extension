@@ -17,7 +17,14 @@ import {
   type LineData,
 } from './layers';
 import { onIsolatedMessage, postToIsolated } from '../shared/messages';
-import { DEFAULT_DISPLAY_SETTINGS, type DisplaySettings, type Surface } from '../shared/types';
+import { listingIdFromPath, type DetailListing } from '../shared/listing';
+import { resolveDetailListing } from './listing';
+import {
+  DEFAULT_DISPLAY_SETTINGS,
+  type DisplaySettings,
+  type Itinerary,
+  type Surface,
+} from '../shared/types';
 
 const MAP_SELECTOR = '.maplibregl-map';
 const PIN_SELECTOR = '[data-testid^="pin-container-"]';
@@ -28,12 +35,28 @@ const attached = new WeakSet<MapLike>();
 let current: MapLike | null = null;
 let currentContainer: HTMLElement | null = null;
 
-const surface = (): Surface =>
-  /\/(for-rent|for-sale|share|new-home-for-sale)\/[^/]+\/\d+/.test(location.pathname)
-    ? 'detail'
-    : 'search';
+/**
+ * The drawn journey, held here rather than only pushed at the map. Two things would
+ * otherwise lose it: setStyle(), which drops the journey source along with everything
+ * else, and a detail page's lazy map, which mounts long after the route was calculated.
+ */
+let journey: { itinerary: Itinerary | null; color: string } = { itinerary: null, color: '#000000' };
+
+const surface = (): Surface => (listingIdFromPath(location.pathname) ? 'detail' : 'search');
 
 /* ------------------------------- attachment ------------------------------- */
+
+/**
+ * Everything we draw, drawn. Module-level rather than a closure inside attach() because
+ * the inbound handlers need it too: layers and the journey can each arrive before the
+ * other, and whichever lands second has to put both on the map.
+ */
+function refreshMap(): void {
+  if (!current) return;
+  if (data) ensureLayers(current, data, settings);
+  // ensureLayers re-creates the journey source *empty*, so this must follow it.
+  setJourney(current, journey.itinerary, journey.color);
+}
 
 function attach(map: MapLike, container: HTMLElement): void {
   if (attached.has(map)) return;
@@ -41,15 +64,11 @@ function attach(map: MapLike, container: HTMLElement): void {
   current = map;
   currentContainer = container;
 
-  const refresh = () => {
-    if (data) ensureLayers(map, data, settings);
-  };
-
   // setStyle() drops every custom source and layer; styledata is the only reliable
   // signal that it happened. ensureLayers is idempotent precisely so this is safe.
-  map.on('styledata', refresh);
-  map.on('load', refresh);
-  refresh();
+  map.on('styledata', refreshMap);
+  map.on('load', refreshMap);
+  refreshMap();
 
   bindLineHover(map, container);
   postToIsolated({ type: 'MAP_READY', surface: surface() });
@@ -106,40 +125,97 @@ function tryAttach(attemptDelays = [0, 120, 400, 1000, 2500]): void {
  * constructing a brand-new instance each time, and the detail-page map is lazy-mounted
  * on scroll. Both look identical from here: a new `.maplibregl-map` node appears.
  */
-function watchForMap(): void {
+function syncMap(): void {
+  const container = document.querySelector<HTMLElement>(MAP_SELECTOR);
+  if (!container) {
+    if (current) {
+      current = null;
+      currentContainer = null;
+      postToIsolated({ type: 'MAP_LOST' });
+    }
+    return;
+  }
+
+  // Track the container, not just the map. Next.js can remove the old map and
+  // insert the new one in a single commit, so we can be holding a dead instance
+  // while a live container is already on screen. Keying off `current` alone leaves
+  // that state permanently stuck: the map is non-null, so no retry ever starts.
+  if (container !== currentContainer) {
+    currentContainer = container;
+    current = null;
+    tryAttach();
+    return;
+  }
+
+  const map = findMapInstance(container);
+  if (map && !attached.has(map)) attach(map, container);
+  else if (!map && !current) tryAttach();
+}
+
+/**
+ * The same observer covers the map and the URL. Client-side navigation always rewrites
+ * the DOM, so a mutation is a reliable "something changed" signal - and reading
+ * `location` costs nothing next to the map query that is happening anyway. `popstate`
+ * covers the back button, which can restore a page without rebuilding much of it.
+ */
+function watchPage(): void {
   let scheduled = false;
   const observer = new MutationObserver(() => {
     if (scheduled) return;
     scheduled = true;
     queueMicrotask(() => {
       scheduled = false;
-      const container = document.querySelector<HTMLElement>(MAP_SELECTOR);
-      if (!container) {
-        if (current) {
-          current = null;
-          currentContainer = null;
-          postToIsolated({ type: 'MAP_LOST' });
-        }
-        return;
-      }
-
-      // Track the container, not just the map. Next.js can remove the old map and
-      // insert the new one in a single commit, so we can be holding a dead instance
-      // while a live container is already on screen. Keying off `current` alone leaves
-      // that state permanently stuck: the map is non-null, so no retry ever starts.
-      if (container !== currentContainer) {
-        currentContainer = container;
-        current = null;
-        tryAttach();
-        return;
-      }
-
-      const map = findMapInstance(container);
-      if (map && !attached.has(map)) attach(map, container);
-      else if (!map && !current) tryAttach();
+      syncLocation();
+      syncMap();
     });
   });
   observer.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('popstate', syncLocation);
+}
+
+/* ----------------------------- detail listings ---------------------------- */
+
+let currentPath = location.pathname;
+/** The listing the panel has been told about, kept so it can be re-announced. */
+let announced: DetailListing | null = null;
+
+/**
+ * Props lag the URL: after a route change Next.js updates `location` before the new
+ * page's data is in place, and reading too early yields the *previous* listing. The gate
+ * in shared/listing.ts rejects that, so a stale read costs a retry rather than showing
+ * the wrong property's commute. Same ladder shape as tryAttach.
+ */
+function detectListing(listingId: string, attemptDelays = [0, 120, 400, 1000, 2500]): void {
+  // A newer navigation supersedes an in-flight ladder.
+  if (listingIdFromPath(location.pathname) !== listingId) return;
+
+  const listing = resolveDetailListing(location.pathname);
+  if (listing) {
+    announced = listing;
+    postToIsolated({ type: 'LISTING_DETECTED', ...listing });
+    return;
+  }
+
+  const [, ...rest] = attemptDelays;
+  if (rest.length) {
+    setTimeout(() => detectListing(listingId, rest), rest[0]);
+  } else {
+    postToIsolated({ type: 'LISTING_CLEARED', reason: 'unresolved', pending: false });
+  }
+}
+
+function syncLocation(): void {
+  if (location.pathname === currentPath) return;
+  currentPath = location.pathname;
+
+  const listingId = listingIdFromPath(currentPath);
+  if (listingId === (announced?.listingId ?? null)) return;
+
+  // Drop the previous listing's answer immediately - it belongs to a property that is no
+  // longer on screen. The replacement arrives once the page's data catches up.
+  announced = null;
+  postToIsolated({ type: 'LISTING_CLEARED', reason: 'navigated', pending: listingId !== null });
+  if (listingId) detectListing(listingId);
 }
 
 /* --------------------------------- markers -------------------------------- */
@@ -187,7 +263,9 @@ onIsolatedMessage((msg) => {
     case 'LINES_DATA': {
       // Keep any destinations that arrived first rather than replacing the whole object.
       data = { lines: msg.lines, stops: msg.stops, destinations: data?.destinations };
-      if (current) ensureLayers(current, data, settings);
+      // refreshMap, not ensureLayers: a map that attached before this arrived had no
+      // sources to draw into, so a journey calculated in the meantime is still unpainted.
+      refreshMap();
       break;
     }
     case 'SETTINGS_CHANGED': {
@@ -205,11 +283,21 @@ onIsolatedMessage((msg) => {
       break;
     }
     case 'HIGHLIGHT_ROUTE': {
-      if (current) setJourney(current, msg.itinerary, msg.color);
+      // Held as well as drawn: on a detail page the route is usually calculated before
+      // the map has mounted, so `current` being null here is the normal case, not an edge.
+      journey = { itinerary: msg.itinerary, color: msg.color };
+      if (current) setJourney(current, journey.itinerary, journey.color);
       break;
     }
     case 'CLEAR_SELECTION': {
-      if (current) setJourney(current, null, '#000000');
+      journey = { itinerary: null, color: '#000000' };
+      if (current) setJourney(current, null, journey.color);
+      break;
+    }
+    case 'PANEL_READY': {
+      // Re-announce anything the panel may have missed by loading second.
+      if (current) postToIsolated({ type: 'MAP_READY', surface: surface() });
+      if (announced) postToIsolated({ type: 'LISTING_DETECTED', ...announced });
       break;
     }
   }
@@ -218,7 +306,9 @@ onIsolatedMessage((msg) => {
 /* ---------------------------------- boot ---------------------------------- */
 
 bindMarkerClicks();
-watchForMap();
+watchPage();
 tryAttach();
+const bootListingId = listingIdFromPath(location.pathname);
+if (bootListingId) detectListing(bootListingId);
 // The isolated side may load first or second; ask for state either way.
 postToIsolated({ type: 'REQUEST_INIT' });

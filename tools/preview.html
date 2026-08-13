@@ -15,7 +15,10 @@
   </head>
   <body>
     <div class="fake-map"></div>
-    <div class="note">Stubbed harness — renders the real built <code>isolated.js</code> panel.</div>
+    <div class="note">
+      Stubbed harness — renders the real built <code>isolated.js</code> panel.
+      Add <code>?detail</code> for the self-selecting detail page.
+    </div>
     <script>
       // Minimal stand-ins for the extension APIs the panel uses.
       const DESTINATIONS = [
@@ -70,14 +73,25 @@
         },
       };
 
-      // Simulate a property click shortly after boot, so results are on screen.
-      setTimeout(() => {
-        window.postMessage({ __dpt_v1: true, dir: 'm2i',
-          payload: { type: 'MAP_READY', surface: 'search' } }, location.origin);
-        window.postMessage({ __dpt_v1: true, dir: 'm2i',
-          payload: { type: 'PROPERTY_CLICKED', listingId: '6282327',
-                     lng: -6.2402, lat: 53.2871, priceLabel: '€2,450+' } }, location.origin);
-      }, 400);
+      // Stand in for the MAIN-world script. The panel announces itself with PANEL_READY
+      // when it boots, so the harness answers on that rather than on a guessed delay.
+      // Add ?detail to the URL to preview the detail page, which selects itself.
+      const detail = new URLSearchParams(location.search).has('detail');
+      const send = (payload) =>
+        window.postMessage({ __dpt_v1: true, dir: 'm2i', payload }, location.origin);
+
+      window.addEventListener('message', (event) => {
+        const envelope = event.data;
+        if (envelope?.__dpt_v1 !== true || envelope.dir !== 'i2m') return;
+        if (envelope.payload?.type !== 'PANEL_READY') return;
+
+        send({ type: 'MAP_READY', surface: detail ? 'detail' : 'search' });
+        send(detail
+          ? { type: 'LISTING_DETECTED', listingId: '6640128', lng: -6.267262, lat: 53.329047,
+              label: 'Flat 1, 69 Grove Park, Rathmines, Dublin 6' }
+          : { type: 'PROPERTY_CLICKED', listingId: '6282327',
+              lng: -6.2402, lat: 53.2871, priceLabel: '€2,450+' });
+      });
     </script>
     <script type="module" src="./isolated.js"></script>
   </body>

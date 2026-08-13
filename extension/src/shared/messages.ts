@@ -19,6 +19,19 @@ export type MainToIsolated =
   | { type: 'MAP_LOST' }
   | { type: 'MAP_ATTACH_FAILED'; detail: string }
   | { type: 'PROPERTY_CLICKED'; listingId: string; lng: number; lat: number; priceLabel?: string }
+  /**
+   * A detail page identifies its own property, so the commute is measured without a click.
+   * Sent independently of the map: the coordinates come from the page's data, and the
+   * answer is useful before the lazy-mounted map exists.
+   */
+  | { type: 'LISTING_DETECTED'; listingId: string; lng: number; lat: number; label?: string }
+  /**
+   * The self-selected listing no longer applies: `navigated` means we left it (or moved to
+   * another), `unresolved` means this is a detail page whose coordinates could not be read.
+   * `pending` says a `LISTING_DETECTED` is on its way, so the panel can wait rather than
+   * telling the user to click a pin that a detail page does not have.
+   */
+  | { type: 'LISTING_CLEARED'; reason: 'navigated' | 'unresolved'; pending: boolean }
   | { type: 'LINE_CLICKED'; name: string; detail: string }
   | { type: 'REQUEST_INIT' };
 
@@ -36,7 +49,12 @@ export type IsolatedToMain =
   | { type: 'HIGHLIGHT_ROUTE'; itinerary: Itinerary | null; color: string }
   /** Destination pins are drawn on the map, not just listed in the panel. */
   | { type: 'DESTINATIONS'; destinations: Array<Pick<Destination, 'id' | 'label' | 'lngLat' | 'color' | 'enabled'>> }
-  | { type: 'CLEAR_SELECTION' };
+  | { type: 'CLEAR_SELECTION' }
+  /**
+   * The mirror of `REQUEST_INIT`. Whichever world loads first would otherwise announce
+   * into an empty room: MAIN can resolve a detail listing before the panel is listening.
+   */
+  | { type: 'PANEL_READY' };
 
 /* ---------------------- ISOLATED <-> service worker ----------------------- */
 
