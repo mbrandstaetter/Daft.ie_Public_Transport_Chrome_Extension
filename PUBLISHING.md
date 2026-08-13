@@ -25,7 +25,30 @@ If the answer is no, or no reply arrives, the fallback is a self-hosted MOTIS in
 `RoutingProvider` already exists for this, so it is a base-URL change rather than a rewrite
 (SPEC.md §4.2).
 
-### 3. Unverified: `declarativeNetRequest` setting `User-Agent`
+### 3. The GitHub repository is private
+
+Verified 2026-08-13: unauthenticated access to
+`github.com/mbrandstaetter/Daft.ie_Public_Transport` returns 404, and the GitHub API
+reports the repo as not found without credentials. Three things depend on it being
+reachable:
+
+- the **privacy policy URL** the Store requires — a 404 there fails review outright;
+- the **`+<url>` in the User-Agent** sent to Transitous, which is meant to be a way to
+  identify and contact whoever is generating the traffic;
+- the "Open source: …" line in the listing description.
+
+Either make the repository public (Settings → General → Danger Zone → Change visibility),
+or host the privacy policy somewhere public — GitHub Pages, a Gist, or any static host —
+and update the URL in three places: `PRIVACY.md`'s own links,
+`extension/rules/transitous.json`, and the listing copy below.
+
+Check it resolves for a signed-out visitor before submitting:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://raw.githubusercontent.com/mbrandstaetter/Daft.ie_Public_Transport/main/PRIVACY.md
+```
+
+### 4. Unverified: `declarativeNetRequest` setting `User-Agent`
 
 Transitous rejects generic user agents with `HTTP 403` (verified). Whether Chrome lets an
 extension set `User-Agent` on its *own* service-worker requests is untested. Load the
