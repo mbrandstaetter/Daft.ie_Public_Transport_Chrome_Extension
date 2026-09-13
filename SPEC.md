@@ -386,6 +386,17 @@ total 39 min. Stops carry `ie-transport-for-ireland_*` ids, so Irish GTFS is loa
 query with `arriveBy=true&time=…T08:00:00Z` returned itineraries arriving 07:50Z, 07:55Z
 and 07:58Z (clustering just *before* the target) rather than departing after it.
 
+**…but only for `itineraries`, never for `direct`.** Re-checked 2026-09-13: combining
+`arriveBy=true` with `directModes` makes MOTIS route backwards from the destination, and
+the `direct` array it returns is wrong in two ways. Its polyline is rotated about the
+backward search's meeting point — it starts mid-route, reaches one end, jumps across the
+city and returns, drawing as a closed loop of twice the true length — and on a one-way
+network it measures the *return* trip (a Ballymun → Trinity drive came back as 8.4 km /
+13 min, byte-for-byte the answer to an explicit Trinity → Ballymun request, against
+6.5 km / 8 min the way round actually being travelled). Walk, cycle and drive are
+therefore always requested with `arriveBy=false`, and the arrive-by framing is applied
+locally: street routing has no timetable, so departure = target − duration.
+
 ```ts
 interface RoutingProvider {
   plan(from: LngLat, to: LngLat, opts: CommuteOptions): Promise<Itinerary[]>;

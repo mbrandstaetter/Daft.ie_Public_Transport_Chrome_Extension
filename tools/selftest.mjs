@@ -100,6 +100,19 @@ function dublinParts(instant) {
   };
 }
 const WEEKEND = new Set(['Sat', 'Sun']);
+
+/** Great-circle metres between two [lon, lat] points. */
+function metresApart([lon1, lat1], [lon2, lat2]) {
+  const R = 6371000;
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad;
+  const dLon = (lon2 - lon1) * rad;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 function nextWeekdayTarget(hour, minute, now = new Date()) {
   const today = dublinParts(now);
   let candidate = dublinLocalToInstant(today.year, today.month, today.day, hour, minute);
@@ -252,15 +265,19 @@ if (!offline) {
 
   console.log('\nTravel modes (walk / cycle / drive)');
   {
-    // Mirrors plan() exactly. Two params here are load-bearing and were found by testing:
-    // maxDirectTime must be set or walk/bike return nothing, and transitModes='' is what
-    // suppresses transit ('NONE' is rejected outright by the enum).
+    const FROM = [-6.240178, 53.287142];
+    const TO = [-6.2546, 53.3438];
+
+    // Mirrors plan() exactly. Three params here are load-bearing and were found by
+    // testing: maxDirectTime must be set or walk/bike return nothing, transitModes=''
+    // is what suppresses transit ('NONE' is rejected outright by the enum), and
+    // arriveBy must be false for direct modes - see the note in transitous.ts.
     const buildParams = (mode) => {
       const p = new URLSearchParams({
-        fromPlace: '53.287142,-6.240178',
-        toPlace: '53.3438,-6.2546',
+        fromPlace: `${FROM[1]},${FROM[0]}`,
+        toPlace: `${TO[1]},${TO[0]}`,
         time: nextWeekdayTarget(9, 0).toISOString(),
-        arriveBy: 'true',
+        arriveBy: String(mode === 'transit'),
       });
       if (mode === 'transit') {
         p.set('maxTransfers', '3');
@@ -293,8 +310,26 @@ if (!offline) {
         it.legs.every((l) => l.mode === { walk: 'WALK', bike: 'BIKE', car: 'CAR' }[mode]),
         it.legs.map((l) => l.mode).join(','));
       check(`${mode} leg carries geometry`, !!it.legs[0]?.legGeometry?.points);
-      check(`${mode} respects arriveBy`, new Date(it.endTime) <= nextWeekdayTarget(9, 0));
       check(`${mode} suppresses transit computation`, (body.itineraries ?? []).length === 0);
+
+      // The regression this suite missed once: asked with arriveBy=true, MOTIS returned
+      // a polyline rotated about the backward search's meeting point. It began mid-route
+      // and closed on itself - a loop on the map instead of a line from the property to
+      // the destination - and both endpoints sat ~2.5 km from where they belonged.
+      const geom = it.legs[0].legGeometry;
+      const pts = decodePolyline(geom.points, geom.precision ?? 5);
+      // Walk and cycle snap to the footpath outside the door; a drive can only end at
+      // the nearest road the car may use, which is legitimately a couple of streets away.
+      const snap = mode === 'car' ? 300 : 60;
+      const startGap = metresApart(pts[0], FROM);
+      const endGap = metresApart(pts[pts.length - 1], TO);
+      check(`${mode} route starts at the property`, startGap < snap, `${Math.round(startGap)} m off`);
+      check(`${mode} route ends at the destination`, endGap < snap, `${Math.round(endGap)} m off`);
+
+      let drawn = 0;
+      for (let i = 1; i < pts.length; i++) drawn += metresApart(pts[i - 1], pts[i]);
+      check(`${mode} route is a line, not a loop`, metresApart(pts[0], pts[pts.length - 1]) > snap,
+        `${(drawn / 1000).toFixed(1)} km drawn, ends ${Math.round(metresApart(pts[0], pts[pts.length - 1]))} m from its start`);
     }
 
     // Sanity on the numbers themselves: for a ~7 km city trip these must order sensibly.

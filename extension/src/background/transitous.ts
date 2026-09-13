@@ -157,9 +157,24 @@ const DIRECT_MODE: Record<Exclude<CommuteOptions['travelMode'], 'transit'>, stri
 };
 
 /**
+ * Re-frames a forward-planned street journey as an arrive-by one.
+ *
+ * Sound because street routing has no timetable: the duration the server computed does
+ * not depend on when the journey starts, so the departure is the arrival minus it.
+ */
+function arriveAt(itinerary: Itinerary, targetTime: Date): Itinerary {
+  const ms = new Date(itinerary.endTime).getTime() - new Date(itinerary.startTime).getTime();
+  return {
+    ...itinerary,
+    startTime: new Date(targetTime.getTime() - ms).toISOString(),
+    endTime: targetTime.toISOString(),
+  };
+}
+
+/**
  * Transit journeys come back in `itineraries`; walk/bike/car come back in `direct`.
  *
- * Two parameters were established by testing the live server, and both are easy to get
+ * Three things were established by testing the live server, and all are easy to get
  * wrong silently:
  *  - `maxDirectTime` must be set explicitly. Without it, walk and bike return an empty
  *    `direct` array (the default cutoff is far below a real commute), which reads as
@@ -167,6 +182,16 @@ const DIRECT_MODE: Record<Exclude<CommuteOptions['travelMode'], 'transit'>, stri
  *  - `transitModes=''` suppresses transit entirely. `transitModes=NONE` is rejected
  *    (`enum ModeEnum: unknown value NONE`), and omitting it makes the server compute a
  *    full transit plan we would then throw away.
+ *  - `arriveBy=true` must never be sent with `directModes`. MOTIS answers such a request
+ *    by routing backwards from the destination and the result is unusable twice over
+ *    (checked 2026-09-13, Ballymun -> Trinity): the polyline comes back rotated about the
+ *    backward search's meeting point, so it starts mid-route, runs to one end, jumps
+ *    5 km across the city and returns - it draws as a closed loop of twice the real
+ *    length rather than a line. And on a one-way network it measures the return trip:
+ *    that drive came back as 8.4 km / 13 min, exactly what an explicit destination ->
+ *    property request returns, against 6.5 km / 8 min in the direction actually being
+ *    travelled. Transit itineraries are unaffected; only the `direct` array is wrong.
+ *    So direct modes are always asked forwards and `arriveAt` does the arithmetic.
  */
 export async function plan(
   from: [number, number],
@@ -174,15 +199,17 @@ export async function plan(
   targetTime: Date,
   options: CommuteOptions
 ): Promise<Itinerary[]> {
+  const travelMode = options.travelMode;
+  const isTransit = travelMode === 'transit';
+  const askArriveBy = isTransit && options.arriveBy;
+
   const params = new URLSearchParams({
     fromPlace: `${from[1]},${from[0]}`,
     toPlace: `${to[1]},${to[0]}`,
     time: targetTime.toISOString(),
-    arriveBy: String(options.arriveBy),
+    arriveBy: String(askArriveBy),
   });
 
-  const travelMode = options.travelMode;
-  const isTransit = travelMode === 'transit';
   if (isTransit) {
     params.set('maxTransfers', String(options.maxTransfers));
     params.set('maxTravelTime', String(options.maxTravelMinutes));
@@ -199,7 +226,10 @@ export async function plan(
 
   const raw = isTransit ? body.itineraries ?? [] : body.direct ?? [];
   const usable = raw.filter(isPlausible);
-  const itineraries = usable.map(toItinerary);
+  const reframe = options.arriveBy && !askArriveBy;
+  const itineraries = usable
+    .map(toItinerary)
+    .map((it) => (reframe ? arriveAt(it, targetTime) : it));
 
   // MOTIS returns several departures for the same journey pattern; keep the fastest few.
   itineraries.sort((a, b) => a.totalMinutes - b.totalMinutes);

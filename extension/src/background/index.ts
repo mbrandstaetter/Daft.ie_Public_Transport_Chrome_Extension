@@ -43,8 +43,13 @@ async function getSettings(): Promise<DisplaySettings> {
 
 // Every field that changes the answer must be in the key, or switching mode or time
 // would serve a stale result from the previous settings.
+//
+// `v2` retires entries cached before walk/cycle/drive stopped being planned backwards
+// (see the arriveBy note in transitous.ts). Without it the looped routes and reversed
+// drive times already in IndexedDB would keep being served for their full seven days.
 const optionsHash = (o: CommuteOptions) =>
   [
+    'v2',
     o.travelMode,
     o.arriveBy ? 'a' : 'd',
     `${o.targetHour}:${o.targetMinute}`,
